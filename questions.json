@@ -1,0 +1,22 @@
+[
+  {
+    "id": "base1",
+    "subject": "기본",
+    "question": "대한민국의 수도는?",
+    "questionImage": "",
+    "answer": "서울",
+    "answerImage": "",
+    "correctCount": 0,
+    "wrongCount": 0
+  },
+  {
+    "id": "base2",
+    "subject": "기본",
+    "question": "옴의 법칙 공식은?",
+    "questionImage": "",
+    "answer": "V = I × R",
+    "answerImage": "",
+    "correctCount": 0,
+    "wrongCount": 0
+  }
+]
