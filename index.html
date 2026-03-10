@@ -35,14 +35,16 @@
   .viewer-actions,
   .form-actions,
   .list-actions,
-  .stats-row {
+  .stats-row,
+  .backup-actions {
     display: flex;
     gap: 10px;
     flex-wrap: wrap;
   }
 
   .top-buttons,
-  .filters {
+  .filters,
+  .backup-actions {
     justify-content: center;
     margin-bottom: 10px;
   }
@@ -62,6 +64,7 @@
   .dark-btn { background: #111; color: white; }
   .gray-btn { background: #555; color: white; }
   .red-btn { background: #c62828; color: white; }
+  .teal-btn { background: #00897b; color: white; }
 
   .sub-info {
     margin-top: 6px;
@@ -156,7 +159,9 @@
 
   .quiz-area,
   .form-panel,
-  .list-panel {
+  .list-panel,
+  .stats-panel,
+  .backup-panel {
     display: none;
   }
 
@@ -205,6 +210,13 @@
     background: #fafbfd;
   }
 
+  .small-note {
+    font-size: 13px;
+    color: #666;
+    margin-top: 8px;
+    line-height: 1.5;
+  }
+
   #addBtn {
     position: fixed;
     right: 22px;
@@ -221,7 +233,7 @@
   @media (max-width: 768px) {
     h1 { font-size: 23px; }
     button { width: 100%; }
-    .top-buttons, .filters, .quiz-actions, .viewer-actions, .form-actions, .list-actions, .stats-row {
+    .top-buttons, .filters, .quiz-actions, .viewer-actions, .form-actions, .list-actions, .stats-row, .backup-actions {
       flex-direction: column;
     }
     .field textarea { min-height: 200px; }
@@ -239,6 +251,7 @@
     <button class="orange-btn" onclick="drawNextCard()">문제 시작 / 다음 문제</button>
     <button class="purple-btn" onclick="toggleListPanel()">전체 문제 보기</button>
     <button class="dark-btn" onclick="toggleStatsPanel()">통계 보기</button>
+    <button class="teal-btn" onclick="toggleBackupPanel()">백업/복원</button>
   </div>
 
   <div class="filters">
@@ -254,7 +267,9 @@
     </select>
   </div>
 
-  <div class="sub-info" id="countInfo">현재 등록된 문제 수: 0개</div>
+  <div class="sub-info" id="countInfo">전체 문제 수: 0개</div>
+  <div class="sub-info" id="baseInfo">기본(JSON) 문제 수: 0개</div>
+  <div class="sub-info" id="userInfo">추가 저장 문제 수: 0개</div>
   <div class="sub-info" id="filteredInfo">현재 필터 적용 문제 수: 0개</div>
   <div class="sub-info" id="modeInfo">현재 모드: 문제 모드</div>
 </header>
@@ -333,21 +348,41 @@
     <div id="allCardsList"></div>
   </section>
 
-  <section class="panel list-panel" id="statsPanel">
+  <section class="panel stats-panel" id="statsPanel">
     <h2>정답률 통계</h2>
     <div class="list-actions" style="margin-bottom:16px;">
       <button class="gray-btn" onclick="toggleStatsPanel()">닫기</button>
     </div>
     <div class="stats-row" id="statsContent"></div>
   </section>
+
+  <section class="panel backup-panel" id="backupPanel">
+    <h2>백업 / 복원</h2>
+
+    <div class="backup-actions">
+      <button class="teal-btn" onclick="exportUserData()">추가 문제 내보내기(JSON)</button>
+      <button class="purple-btn" onclick="document.getElementById('importFile').click()">추가 문제 불러오기(JSON)</button>
+      <button class="red-btn" onclick="clearUserData()">추가 문제 전체 삭제</button>
+    </div>
+
+    <input type="file" id="importFile" accept=".json,application/json" style="display:none;" onchange="importUserData(event)">
+
+    <div class="small-note">
+      기본 문제는 <strong>questions.json</strong> 에서 불러옵니다.<br>
+      여기서 내보내기/불러오기는 <strong>직접 추가한 문제만</strong> 대상입니다.
+    </div>
+  </section>
 </main>
 
 <button id="addBtn" onclick="openAddForm()">+</button>
 
 <script>
-const STORAGE_KEY = "flashcard_app_cards_v4";
-const APP_STATE_KEY = "flashcard_app_state_v4";
+const BASE_QUESTIONS_URL = "questions.json";
+const USER_STORAGE_KEY = "flashcard_user_cards_v1";
+const APP_STATE_KEY = "flashcard_app_state_v5";
 
+let baseCards = [];
+let userCards = [];
 let cards = [];
 let filteredCards = [];
 let currentCard = null;
@@ -356,64 +391,57 @@ let orderMode = "random";
 let currentSequenceIndex = -1;
 let editingId = null;
 
-function defaultCards() {
-  return [
-    {
-      id: makeId(),
-      subject: "기본",
-      question: "대한민국의 수도는?",
-      questionImage: "",
-      answer: "서울",
-      answerImage: "",
-      correctCount: 0,
-      wrongCount: 0
-    },
-    {
-      id: makeId(),
-      subject: "기본",
-      question: "옴의 법칙 공식은?",
-      questionImage: "",
-      answer: "V = I × R",
-      answerImage: "",
-      correctCount: 0,
-      wrongCount: 0
-    }
-  ];
+function makeId(prefix = "user") {
+  return prefix + "_" + Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
-function makeId() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+function normalizeCard(card, source = "user") {
+  return {
+    id: card.id || makeId(source),
+    source: card.source || source,
+    subject: card.subject || "미분류",
+    question: card.question || "",
+    questionImage: card.questionImage || "",
+    answer: card.answer || "",
+    answerImage: card.answerImage || "",
+    correctCount: Number(card.correctCount || 0),
+    wrongCount: Number(card.wrongCount || 0)
+  };
 }
 
-function saveCards() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(cards));
+async function loadBaseCards() {
+  try {
+    const res = await fetch(BASE_QUESTIONS_URL + "?v=" + Date.now());
+    if (!res.ok) throw new Error("questions.json 불러오기 실패");
+    const data = await res.json();
+    baseCards = Array.isArray(data)
+      ? data.map(card => normalizeCard(card, "base"))
+      : [];
+  } catch (err) {
+    console.error(err);
+    baseCards = [];
+    alert("questions.json 파일을 불러오지 못했습니다. 파일 이름과 JSON 형식을 확인하세요.");
+  }
 }
 
-function saveAppState() {
-  localStorage.setItem(APP_STATE_KEY, JSON.stringify({ orderMode }));
-}
-
-function loadCards() {
-  const saved = localStorage.getItem(STORAGE_KEY);
+function loadUserCards() {
+  const saved = localStorage.getItem(USER_STORAGE_KEY);
   if (saved) {
     try {
-      cards = JSON.parse(saved);
+      const data = JSON.parse(saved);
+      userCards = Array.isArray(data)
+        ? data.map(card => normalizeCard(card, "user"))
+        : [];
     } catch {
-      cards = defaultCards();
+      userCards = [];
     }
   } else {
-    cards = defaultCards();
-    saveCards();
+    userCards = [];
   }
+}
 
-  cards = cards.map(card => ({
-    correctCount: 0,
-    wrongCount: 0,
-    subject: "",
-    questionImage: "",
-    answerImage: "",
-    ...card
-  }));
+function saveUserCards() {
+  localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(userCards));
 }
 
 function loadAppState() {
@@ -426,14 +454,25 @@ function loadAppState() {
   }
 }
 
+function saveAppState() {
+  localStorage.setItem(APP_STATE_KEY, JSON.stringify({ orderMode }));
+}
+
+function rebuildCards() {
+  cards = [...baseCards, ...userCards];
+}
+
 function updateCount() {
-  document.getElementById("countInfo").innerText = `현재 등록된 문제 수: ${cards.length}개`;
+  document.getElementById("countInfo").innerText = `전체 문제 수: ${cards.length}개`;
+  document.getElementById("baseInfo").innerText = `기본(JSON) 문제 수: ${baseCards.length}개`;
+  document.getElementById("userInfo").innerText = `추가 저장 문제 수: ${userCards.length}개`;
   document.getElementById("filteredInfo").innerText = `현재 필터 적용 문제 수: ${filteredCards.length}개`;
 }
 
 function updateModeText() {
   const modeName = currentMode === "quiz" ? "문제 모드" : "정답 보기 모드";
-  document.getElementById("modeInfo").innerText = `현재 모드: ${modeName} / 출제 방식: ${orderMode === "random" ? "랜덤" : "순서"} 모드`;
+  const orderName = orderMode === "random" ? "랜덤" : "순서";
+  document.getElementById("modeInfo").innerText = `현재 모드: ${modeName} / 출제 방식: ${orderName} 모드`;
 }
 
 function setMode(mode) {
@@ -480,6 +519,7 @@ function renderQuestionOnly(card) {
   document.getElementById("card").innerHTML = `
     <div class="card-section">
       <div class="card-title">과목: ${escapeHtml(card.subject || "미분류")}</div>
+      <div class="meta">구분: ${card.source === "base" ? "기본(JSON)" : "추가 저장"}</div>
       <div class="section-label">문제</div>
       <div class="card-text">${escapeHtml(card.question)}</div>
       ${renderImage(card.questionImage, "문제 이미지")}
@@ -491,6 +531,7 @@ function renderQuestionAndAnswer(card) {
   document.getElementById("card").innerHTML = `
     <div class="card-section">
       <div class="card-title">과목: ${escapeHtml(card.subject || "미분류")}</div>
+      <div class="meta">구분: ${card.source === "base" ? "기본(JSON)" : "추가 저장"}</div>
       <div class="section-label">문제</div>
       <div class="card-text">${escapeHtml(card.question)}</div>
       ${renderImage(card.questionImage, "문제 이미지")}
@@ -502,28 +543,6 @@ function renderQuestionAndAnswer(card) {
       ${renderImage(card.answerImage, "정답 이미지")}
     </div>
   `;
-}
-
-function applyFilters() {
-  const subject = document.getElementById("subjectFilter").value.trim().toLowerCase();
-  const keyword = document.getElementById("searchInput").value.trim().toLowerCase();
-
-  filteredCards = cards.filter(card => {
-    const subjectMatch = !subject || (card.subject || "").toLowerCase() === subject;
-    const keywordTarget = `${card.subject} ${card.question} ${card.answer}`.toLowerCase();
-    const keywordMatch = !keyword || keywordTarget.includes(keyword);
-    return subjectMatch && keywordMatch;
-  });
-
-  currentSequenceIndex = -1;
-  updateCount();
-
-  if (document.getElementById("listPanel").style.display === "block") {
-    renderAllCardsList();
-  }
-  if (document.getElementById("statsPanel").style.display === "block") {
-    renderStats();
-  }
 }
 
 function refreshSubjectOptions() {
@@ -542,6 +561,24 @@ function refreshSubjectOptions() {
   if ([...select.options].some(opt => opt.value === current)) {
     select.value = current;
   }
+}
+
+function applyFilters() {
+  const subject = document.getElementById("subjectFilter").value.trim().toLowerCase();
+  const keyword = document.getElementById("searchInput").value.trim().toLowerCase();
+
+  filteredCards = cards.filter(card => {
+    const subjectMatch = !subject || (card.subject || "").toLowerCase() === subject;
+    const keywordTarget = `${card.subject} ${card.question} ${card.answer}`.toLowerCase();
+    const keywordMatch = !keyword || keywordTarget.includes(keyword);
+    return subjectMatch && keywordMatch;
+  });
+
+  currentSequenceIndex = -1;
+  updateCount();
+
+  if (document.getElementById("listPanel").style.display === "block") renderAllCardsList();
+  if (document.getElementById("statsPanel").style.display === "block") renderStats();
 }
 
 function getNextCard() {
@@ -582,6 +619,39 @@ function clearAnswerInput() {
   document.getElementById("answerInput").value = "";
 }
 
+function updateStatsToStorage(cardId, isCorrect) {
+  let updated = false;
+
+  baseCards = baseCards.map(card => {
+    if (card.id === cardId) {
+      updated = true;
+      return {
+        ...card,
+        correctCount: card.correctCount + (isCorrect ? 1 : 0),
+        wrongCount: card.wrongCount + (isCorrect ? 0 : 1)
+      };
+    }
+    return card;
+  });
+
+  if (!updated) {
+    userCards = userCards.map(card => {
+      if (card.id === cardId) {
+        return {
+          ...card,
+          correctCount: card.correctCount + (isCorrect ? 1 : 0),
+          wrongCount: card.wrongCount + (isCorrect ? 0 : 1)
+        };
+      }
+      return card;
+    });
+    saveUserCards();
+  }
+
+  rebuildCards();
+  applyFilters();
+}
+
 function checkAnswer() {
   if (!currentCard) {
     alert("먼저 문제 시작 / 다음 문제 버튼을 눌러 문제를 불러오세요.");
@@ -596,27 +666,20 @@ function checkAnswer() {
 
   const correctAnswer = (currentCard.answer || "").trim();
   const result = document.getElementById("result");
+  const isCorrect = userAnswer === correctAnswer;
 
-  const targetIndex = cards.findIndex(c => c.id === currentCard.id);
-  if (targetIndex === -1) return;
+  updateStatsToStorage(currentCard.id, isCorrect);
 
-  if (userAnswer === correctAnswer) {
-    cards[targetIndex].correctCount++;
+  if (isCorrect) {
     result.className = "result correct";
     result.innerText = `정답입니다.\n\n정답: ${correctAnswer}`;
   } else {
-    cards[targetIndex].wrongCount++;
     result.className = "result wrong";
     result.innerText = `오답입니다.\n\n정답: ${correctAnswer}`;
   }
 
-  saveCards();
-  if (document.getElementById("statsPanel").style.display === "block") {
-    renderStats();
-  }
-  if (document.getElementById("listPanel").style.display === "block") {
-    renderAllCardsList();
-  }
+  if (document.getElementById("statsPanel").style.display === "block") renderStats();
+  if (document.getElementById("listPanel").style.display === "block") renderAllCardsList();
 }
 
 function toggleAddForm() {
@@ -692,18 +755,29 @@ async function saveCard() {
   const newAnswerImage = await fileToDataURL(answerFile);
 
   if (editingId) {
-    const index = cards.findIndex(c => c.id === editingId);
-    if (index !== -1) {
-      cards[index].subject = subject;
-      cards[index].question = question;
-      cards[index].answer = answer;
-      if (newQuestionImage !== null) cards[index].questionImage = newQuestionImage;
-      if (newAnswerImage !== null) cards[index].answerImage = newAnswerImage;
+    const baseIndex = baseCards.findIndex(c => c.id === editingId);
+    const userIndex = userCards.findIndex(c => c.id === editingId);
+
+    if (baseIndex !== -1) {
+      baseCards[baseIndex].subject = subject;
+      baseCards[baseIndex].question = question;
+      baseCards[baseIndex].answer = answer;
+      if (newQuestionImage !== null) baseCards[baseIndex].questionImage = newQuestionImage;
+      if (newAnswerImage !== null) baseCards[baseIndex].answerImage = newAnswerImage;
+      alert("기본(JSON) 문제가 현재 브라우저 세션에서 수정되었습니다. 영구 반영하려면 questions.json도 직접 수정해야 합니다.");
+    } else if (userIndex !== -1) {
+      userCards[userIndex].subject = subject;
+      userCards[userIndex].question = question;
+      userCards[userIndex].answer = answer;
+      if (newQuestionImage !== null) userCards[userIndex].questionImage = newQuestionImage;
+      if (newAnswerImage !== null) userCards[userIndex].answerImage = newAnswerImage;
+      saveUserCards();
+      alert("추가 저장 문제가 수정되었습니다.");
     }
-    alert("문제가 수정되었습니다.");
   } else {
-    cards.push({
-      id: makeId(),
+    userCards.push({
+      id: makeId("user"),
+      source: "user",
       subject,
       question,
       questionImage: newQuestionImage || "",
@@ -712,10 +786,11 @@ async function saveCard() {
       correctCount: 0,
       wrongCount: 0
     });
+    saveUserCards();
     alert("문제가 저장되었습니다.");
   }
 
-  saveCards();
+  rebuildCards();
   refreshSubjectOptions();
   applyFilters();
   resetForm();
@@ -753,13 +828,20 @@ function deleteCard(id) {
   const ok = confirm(`정말 삭제하시겠습니까?\n\n과목: ${card.subject || "미분류"}\n문제: ${(card.question || "").slice(0, 30)}...`);
   if (!ok) return;
 
-  cards = cards.filter(c => c.id !== id);
+  if (card.source === "base") {
+    baseCards = baseCards.filter(c => c.id !== id);
+    alert("기본(JSON) 문제는 현재 브라우저 화면에서만 제거됩니다. 영구 반영하려면 questions.json에서도 삭제하세요.");
+  } else {
+    userCards = userCards.filter(c => c.id !== id);
+    saveUserCards();
+  }
+
   if (currentCard && currentCard.id === id) {
     currentCard = null;
     renderEmpty("문제가 삭제되었습니다. 다음 문제를 불러오세요.");
   }
 
-  saveCards();
+  rebuildCards();
   refreshSubjectOptions();
   applyFilters();
   renderAllCardsList();
@@ -792,7 +874,13 @@ function renderAllCardsList() {
     html += `
       <div class="list-item">
         <div class="list-number">${index + 1}번 문제</div>
-        <div class="meta">과목: ${escapeHtml(card.subject || "미분류")} / 정답 ${card.correctCount || 0} / 오답 ${card.wrongCount || 0} / 정답률 ${rate}%</div>
+        <div class="meta">
+          과목: ${escapeHtml(card.subject || "미분류")} /
+          구분: ${card.source === "base" ? "기본(JSON)" : "추가 저장"} /
+          정답 ${card.correctCount || 0} /
+          오답 ${card.wrongCount || 0} /
+          정답률 ${rate}%
+        </div>
 
         <div class="section-label">문제</div>
         <div class="card-text">${escapeHtml(card.question || "")}</div>
@@ -861,14 +949,81 @@ function renderStats() {
   `;
 }
 
-loadCards();
-loadAppState();
-document.getElementById("orderMode").value = orderMode;
-refreshSubjectOptions();
-filteredCards = [...cards];
-updateCount();
-setMode("quiz");
-applyFilters();
+function toggleBackupPanel() {
+  const panel = document.getElementById("backupPanel");
+  panel.style.display = panel.style.display === "block" ? "none" : "block";
+}
+
+function exportUserData() {
+  const dataStr = JSON.stringify(userCards, null, 2);
+  const blob = new Blob([dataStr], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "flashcard-user-backup.json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importUserData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const imported = JSON.parse(e.target.result);
+      if (!Array.isArray(imported)) {
+        alert("JSON 형식이 올바르지 않습니다.");
+        return;
+      }
+
+      const normalized = imported.map(card => normalizeCard(card, "user"))
+        .map(card => ({ ...card, id: card.id || makeId("user"), source: "user" }));
+
+      userCards = [...userCards, ...normalized];
+      saveUserCards();
+      rebuildCards();
+      refreshSubjectOptions();
+      applyFilters();
+      alert("추가 문제 불러오기가 완료되었습니다.");
+    } catch {
+      alert("JSON 파일을 읽는 중 오류가 발생했습니다.");
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = "";
+}
+
+function clearUserData() {
+  const ok = confirm("직접 추가한 문제를 모두 삭제하시겠습니까?");
+  if (!ok) return;
+
+  userCards = [];
+  saveUserCards();
+  rebuildCards();
+  refreshSubjectOptions();
+  applyFilters();
+  renderAllCardsList();
+  renderStats();
+  alert("추가 문제가 모두 삭제되었습니다.");
+}
+
+async function initializeApp() {
+  loadAppState();
+  document.getElementById("orderMode").value = orderMode;
+
+  await loadBaseCards();
+  loadUserCards();
+  rebuildCards();
+  refreshSubjectOptions();
+  filteredCards = [...cards];
+  updateCount();
+  setMode("quiz");
+  applyFilters();
+}
+
+initializeApp();
 </script>
 </body>
 </html>
